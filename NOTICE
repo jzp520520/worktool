@@ -1,0 +1,14 @@
+WorkTool Android Project
+Copyright 2024-2026
+
+This project includes the following third-party libraries:
+
+- Glide (Apache-2.0)
+- Gson (Apache-2.0)
+- OkGo (Apache-2.0)
+- QMUI (Apache-2.0)
+- EasyFloat (Apache-2.0)
+- PhotoView (Apache-2.0)
+- utilcodex (Apache-2.0)
+- ToastUtils (Apache-2.0)
+- 友盟SDK (商业SDK，详见其服务条款)

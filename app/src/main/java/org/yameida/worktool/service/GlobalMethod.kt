@@ -1,3 +1,7 @@
+﻿// Copyright 2024-2026 WorkTool
+// Licensed under the Apache License, Version 2.0
+// SPDX-License-Identifier: Apache-2.0
+
 package org.yameida.worktool.service
 
 import android.app.PendingIntent
@@ -17,6 +21,7 @@ import org.yameida.worktool.utils.FloatWindowHelper
 import org.yameida.worktool.utils.Views
 import java.lang.Exception
 
+var lastWechatNotHomeToast = 0L // Toast限频：60秒内只弹一次
 var requestCode = 1000000
 fun fastStartActivity(context: Context, clazz: Class<*>, flags: Int = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP, i: Intent? = null) {
     val intent = i ?: Intent(context, clazz)
@@ -149,7 +154,12 @@ fun getRoot(ignoreCheck: Boolean, share: Boolean = false): AccessibilityNodeInfo
                         error("当前不在企业微信: ${root.packageName}")
                         if (!FloatWindowHelper.isPause) {
                             LogUtils.e("当前不在企业微信: ${root.packageName}\n尝试跳转到企业微信")
-                            ToastUtils.show("当前不在企业微信: ${root.packageName}\n尝试跳转到企业微信")
+                            // 限频：60秒内只弹一次
+                            val now = System.currentTimeMillis()
+                            if (now - lastWechatNotHomeToast > 60000) {
+                                lastWechatNotHomeToast = now
+                                ToastUtils.show("当前不在企业微信: ${root.packageName}\n尝试跳转到企业微信")
+                            }
                             Utils.getApp().packageManager.getLaunchIntentForPackage(Constant.PACKAGE_NAMES)
                                 ?.apply {
                                     this.flags = Intent.FLAG_ACTIVITY_NEW_TASK

@@ -1,3 +1,7 @@
+﻿// Copyright 2024-2026 WorkTool
+// Licensed under the Apache License, Version 2.0
+// SPDX-License-Identifier: Apache-2.0
+
 package org.yameida.worktool.utils
 
 import okhttp3.*
@@ -40,6 +44,7 @@ object OkHttpUtil {
                     return true
                 }
             })
+            builder.connectTimeout(10, TimeUnit.SECONDS)
             builder.readTimeout(20, TimeUnit.SECONDS)
             builder.writeTimeout(20, TimeUnit.SECONDS)
             return builder.build()

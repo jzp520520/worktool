@@ -1,5 +1,10 @@
+﻿// Copyright 2024-2026 WorkTool
+// Licensed under the Apache License, Version 2.0
+// SPDX-License-Identifier: Apache-2.0
+
 package org.yameida.worktool.service
 
+import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Message
 import android.view.accessibility.AccessibilityNodeInfo
@@ -29,6 +34,7 @@ object WeworkLoopImpl {
 
     val stopWords = arrayListOf("解析中")
     var logIndex = 0
+    private var lastFriendRequestTime = 0L // 通讯录检查限频：60秒一次
 
     fun mainLoop() {
         if (!WeworkController.enableLoopRunning)
@@ -36,30 +42,65 @@ object WeworkLoopImpl {
         mainLoopRunning = true
         try {
             while (mainLoopRunning) {
-                if (!isAtHome()) {
-                    LogUtils.d("当前在房间: ")
-                    getChatMessageList()
-                    if (mainLoopRunning) {
-                        goHome()
-                    }
-                    continue
-                }
-                if (!mainLoopRunning) break
-                if (getChatroomList()) {
-                    LogUtils.d("点击进入聊天页: ")
-                    AccessibilityUtil.waitForPageMissing("WwMainActivity", "GlobalSearchActivity")
-                    if (!getChatMessageList()) {
-                        sleep(Constant.POP_WINDOW_INTERVAL)
-                        LogUtils.d("重试获取聊天列表: ")
+                // ===== 企微工作阶段：52秒 =====
+                val weworkStartTime = System.currentTimeMillis()
+                while (mainLoopRunning && System.currentTimeMillis() - weworkStartTime < 52000) {
+                    if (!isAtHome()) {
+                        LogUtils.d("当前在房间: ")
                         getChatMessageList()
+                        if (mainLoopRunning) {
+                            goHome()
+                        }
+                        continue
+                    }
+                    if (!mainLoopRunning) break
+                    // 消息页面：快速遍历聊天列表拉取新消息
+                    if (getChatroomList()) {
+                        LogUtils.d("点击进入聊天页: ")
+                        AccessibilityUtil.waitForPageMissing("WwMainActivity", "GlobalSearchActivity")
+                        if (!getChatMessageList()) {
+                            LogUtils.d("重试获取聊天列表: ")
+                            getChatMessageList()
+                        }
+                    }
+                    if (!mainLoopRunning) break
+                    // 通讯录只60秒跑一次，每次不超过3秒
+                    val now = System.currentTimeMillis()
+                    if (now - lastFriendRequestTime > 60000) {
+                        lastFriendRequestTime = now
+                        getFriendRequest()
+                    }
+                    if (!mainLoopRunning) break
+                    checkRealName()
+                    if (!mainLoopRunning) break
+                    sleep(1000) // 消息循环间隔1秒，优化响应速度
+                }
+
+                // ===== WorkTool前台展示：8秒 =====
+                if (mainLoopRunning) {
+                    try {
+                        val worktoolIntent = Utils.getApp().packageManager
+                            .getLaunchIntentForPackage(Utils.getApp().packageName)
+                        if (worktoolIntent != null) {
+                            worktoolIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                            Utils.getApp().startActivity(worktoolIntent)
+                        }
+                        sleep(1000) // 前台展示1秒
+                        // 切回企微
+                        val weworkIntent = Utils.getApp().packageManager
+                            .getLaunchIntentForPackage("com.tencent.wework")
+                        if (weworkIntent != null) {
+                            weworkIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                            Utils.getApp().startActivity(weworkIntent)
+                            sleep(1000) // 等待企微启动并稳定
+                            // 切回后先回首页，避免误读旧消息造成重复发送
+                            goHome()
+                            sleep(500)
+                        }
+                    } catch (_: Exception) {
+                        LogUtils.e("前台切换异常")
                     }
                 }
-                if (!mainLoopRunning) break
-                getFriendRequest()
-                if (!mainLoopRunning) break
-                checkRealName()
-                if (!mainLoopRunning) break
-                sleep(300)
             }
         } catch (e: Exception) {
             LogUtils.e("ERROR mainLoop: " + e.message, e)
@@ -160,7 +201,7 @@ object WeworkLoopImpl {
      * @param needInfer 是否需要推断@me并等待回复
      * @param timeout 在房间内等待回复的时长
      */
-    fun getChatMessageList(needInfer: Boolean = !Constant.pushImage, imageCheck: Boolean = true, timeout: Long = 5000, titleList: ArrayList<String>? = null): Boolean {
+    fun getChatMessageList(needInfer: Boolean = !Constant.pushImage, imageCheck: Boolean = true, timeout: Long = 3000, titleList: ArrayList<String>? = null): Boolean {
         if (Constant.autoReply == 0) return true
         val roomType = WeworkRoomUtil.getRoomType()
         var titleList = titleList ?: WeworkRoomUtil.getRoomTitle()
@@ -196,7 +237,7 @@ object WeworkLoopImpl {
                         }
                     }
                 }
-                sleep(Constant.POP_WINDOW_INTERVAL / 5)
+                sleep(Constant.POP_WINDOW_INTERVAL / 10)
                 LogUtils.v("双重校验聊天列表")
                 val list2 = AccessibilityUtil.findOneByClazz(getRoot(), Views.ListView)
                 if (list2 != null) {

@@ -1,3 +1,7 @@
+// Copyright 2024-2026 WorkTool
+// Licensed under the Apache License, Version 2.0
+// SPDX-License-Identifier: Apache-2.0
+
 package org.yameida.worktool.utils;
 
 import android.util.Log;
@@ -39,12 +43,13 @@ public class WebSocketManager {
     private WebSocketListener listener;
     private boolean connecting = false;
     private long lastConnectedTime = 0L;
+    private long lastRobotRunningToast = 0L; // 限频：60秒弹一次
 
     public WebSocketManager(String url, WebSocketListener listener) {
         Log.e(url, "新建链接");
         this.url = url;
         this.listener = listener;
-        OkHttpClient client = new OkHttpClient();
+        OkHttpClient client = OkHttpUtil.INSTANCE.getOkHttpClient();
         Request request = new Request.Builder().url(url).build();
         this.socket = client.newWebSocket(request, listener);
         socket.send("{\"td\":" + System.currentTimeMillis() + "}");
@@ -138,7 +143,7 @@ public class WebSocketManager {
     }
 
     private boolean connect() {
-        WebSocket s = new OkHttpClient().newWebSocket(new Request.Builder().url(url).build(), listener);
+        WebSocket s = OkHttpUtil.INSTANCE.getOkHttpClient().newWebSocket(new Request.Builder().url(url).build(), listener);
         if (s.send(WebSocketManager.HEARTBEAT)) {
             this.socket = s;
             s.send("{\"td\":" + System.currentTimeMillis() + "}");
@@ -164,7 +169,11 @@ public class WebSocketManager {
             }
             if (!Constant.INSTANCE.getEnableMediaProject()) {
                 if (System.currentTimeMillis() - lastConnectedTime > heartBeatRate * 3000 && !FloatWindowHelper.INSTANCE.isPause()) {
-                    ToastUtils.show("机器人运行中 请勿人工操作手机~");
+                    // 限频：60秒弹一次
+                    if (System.currentTimeMillis() - lastRobotRunningToast > 60000) {
+                        lastRobotRunningToast = System.currentTimeMillis();
+                        ToastUtils.show("机器人运行中 请勿人工操作手机~");
+                    }
                 }
             }
         };

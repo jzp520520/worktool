@@ -1,3 +1,7 @@
+﻿// Copyright 2024-2026 WorkTool
+// Licensed under the Apache License, Version 2.0
+// SPDX-License-Identifier: Apache-2.0
+
 package org.yameida.worktool
 
 import com.blankj.utilcode.util.SPUtils
@@ -8,13 +12,13 @@ object Constant {
     val AVAILABLE_VERSION_MAP = mapOf(Pair("4.0.2", 40002), Pair("4.0.6", 40006), Pair("4.0.8", 40008), Pair("4.0.10", 40010), Pair("4.0.12", 40012), Pair("4.0.16", 40016), Pair("4.0.18", 40018), Pair("4.0.19", 40019), Pair("4.0.20", 40020), Pair("4.1.0", 40100), Pair("4.1.2", 40102), Pair("4.1.3", 40103), Pair("4.1.6", 40106), Pair("4.1.7", 40107), Pair("4.1.8", 40108), Pair("4.1.9", 40109), Pair("4.1.9", 40110))
     const val PACKAGE_NAMES = "com.tencent.wework"
     const val WEWORK_NOTIFY = "wework_notify"
-    const val BASE_LONG_INTERVAL = 5000L
-    const val BASE_CHANGE_PAGE_INTERVAL = 1000L
-    const val BASE_POP_WINDOW_INTERVAL = 500L
+    const val BASE_LONG_INTERVAL = 20000L
+    const val BASE_CHANGE_PAGE_INTERVAL = 4000L
+    const val BASE_POP_WINDOW_INTERVAL = 2000L
     var LONG_INTERVAL = BASE_LONG_INTERVAL
     var CHANGE_PAGE_INTERVAL = BASE_CHANGE_PAGE_INTERVAL
     var POP_WINDOW_INTERVAL = BASE_POP_WINDOW_INTERVAL
-    private const val DEFAULT_HOST = "wss://api.worktool.ymdyes.cn"
+    private const val DEFAULT_HOST = "wss://app.dao80.com"
 
     var version = Int.MAX_VALUE
     var myName = ""
