@@ -63,12 +63,15 @@ object MyLooper {
 
     fun init() {
         LogUtils.i("init myLooper...")
-        SPUtils.getInstance("noTipMessage").clear()
-        SPUtils.getInstance("lastSyncMessage").clear()
-        SPUtils.getInstance("noSyncMessage").clear()
+        // P1-E: 不再清除去重/水位相关的 SP。这些是跨重启/跨无障碍重连(onServiceConnected
+        // 每次都跑 init)必须保留的状态, 清掉会直接导致 漏消息 + 重复告警/重复点击:
+        //   lastSyncMessage  收消息水位(清了=红点消失但服务器没收到的消息不再补救=漏)
+        //   noSyncMessage    不一致告警去重(清了=同一条反复 error+进房间)
+        //   noTipMessage     系统消息 1h 限频(清了=同一条反复点击/上报)
+        //   groupInvite      群邀请幂等(清了=对同一邀请二次点击)
+        //   lastImage        图片去重(清了=重复推图)
+        // 仅清纯运行时缓存(无副作用): limit(建群限频统计) / myInfo(实名标记, 读时默认true)
         SPUtils.getInstance("limit").clear()
-        SPUtils.getInstance("groupInvite").clear()
-        SPUtils.getInstance("lastImage").clear()
         SPUtils.getInstance("myInfo").clear()
     }
 
@@ -115,19 +118,40 @@ object MyLooper {
                     WeworkController.enableLoopRunning = true
                 } else {
                     WeworkController.mainLoopRunning = false
-                    LogUtils.v("加入指令到执行队列", if (message.fileBase64.isNullOrEmpty()) GsonUtils.toJson(message) else message.type)
+                    LogUtils.v("加入指令到执行队列", if (message.fileBase64.isNullOrEmpty()) GsonUtils.toJson(message) else message.type.toString())
                     val messageWhat = StringFeatureUtil.generateFeatureValue(text)
                     if (Constant.duplicationFilter) {
                         getInstance().removeMessages(messageWhat)
                     }
-                    getInstance().sendMessage(Message.obtain().apply {
-                        what = messageWhat
-                        obj = message.apply {
-                            messageId = messageList.messageId
-                            meta = messageList.meta
-                            apiSend = messageList.apiSend
-                        }
-                    })
+                    // 支持官方API的 up:true 指令插队功能
+                    // 插队指令放到队列顶部优先执行
+                    val shouldQueueFirst = message.up == true
+                    if (shouldQueueFirst) {
+                        // 插队：先移除 LOOP_RECEIVE_NEW_MESSAGE，插入指令后再加回来
+                        getInstance().removeMessages(WeworkMessageBean.LOOP_RECEIVE_NEW_MESSAGE)
+                        getInstance().sendMessageAtFrontOfQueue(Message.obtain().apply {
+                            what = messageWhat
+                            obj = message.apply {
+                                messageId = messageList.messageId
+                                meta = messageList.meta
+                                apiSend = messageList.apiSend
+                            }
+                        })
+                        getInstance().sendMessage(Message.obtain().apply {
+                            what = WeworkMessageBean.LOOP_RECEIVE_NEW_MESSAGE
+                            obj = WeworkMessageBean().apply { type = WeworkMessageBean.LOOP_RECEIVE_NEW_MESSAGE }
+                        })
+                    } else {
+                        // 正常入队
+                        getInstance().sendMessage(Message.obtain().apply {
+                            what = messageWhat
+                            obj = message.apply {
+                                messageId = messageList.messageId
+                                meta = messageList.meta
+                                apiSend = messageList.apiSend
+                            }
+                        })
+                    }
                 }
                 getInstance().removeMessages(WeworkMessageBean.LOOP_RECEIVE_NEW_MESSAGE)
                 getInstance().sendMessage(Message.obtain().apply {

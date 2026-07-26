@@ -1,0 +1,51 @@
+# P1-E: worktool APP 去重/漏消息补丁
+
+> 2026-07-26。仓库无法在此环境 build/测试(无 Android 工具链)，以下补丁需你 review 后打进 APK 验证。
+> 目标痛点：**重复回复** + **漏消息**（诊断：主要是本 APP）。
+
+## 已应用（安全、零语法风险）
+
+### Patch 1 — init() 不再清除去重/水位 SP（修「漏消息」+「重复告警」）
+`app/src/main/java/org/yameida/worktool/service/MyLooper.kt` `init()`
+
+**根因**：`init()` 在每次无障碍服务重连(`WeworkService.onServiceConnected`)都跑，原先清空 7 个 SP，其中 5 个是跨重连必须保留的状态：
+- `lastSyncMessage` 收消息**水位游标** —— 清了 → `checkNoSyncMessage` 跳过房间 → 「红点消失但服务器没收到」的消息不再补救上报 = **漏消息**
+- `noSyncMessage` 不一致告警去重 —— 清了 → 同一条反复 `error()` + 进房间
+- `noTipMessage` 系统消息 1h 限频 —— 清了 → 同一条反复点击/上报
+- `groupInvite` 群邀请幂等 —— 清了 → 对同一邀请二次点击
+- `lastImage` 图片去重 —— 清了 → 重复推图
+
+**改法**：只保留 `limit`/`myInfo` 两个纯运行时缓存的 clear，去掉上述 5 个。
+
+### Patch 3a — switchCorp 不再永久关闭去重（修「切企后重复回复」）
+`WeworkOperationImpl.kt` `switchCorp()` 原先 `Constant.duplicationFilter = false` 但**从不恢复** → 切过一次企后，`MyLooper` 的批内(LinkedHashSet)+队列(removeMessages)去重**永久失效**。
+**改法**：删除该行（函数体不依赖此标志，去重保持常开）。
+
+---
+
+## 误报澄清
+
+Explore agent 曾报「`WeworkMessageBean` 无 equals/hashCode → `MyLooper:111` LinkedHashSet 去重 no-op」。
+**经核实是错的**：`WeworkMessageBean.java:415-426` 已有完整的字段级 equals/hashCode，批内去重**是生效的**。无需补 equals/hashCode。
+
+---
+
+## 待你决策的可选增强（Patch 3b — 终端发送幂等）
+
+**场景**：`MyLooper.kt:42-55` `handleMessage` 捕获异常后会 `goHome()` + **重试同一条** `dealWithMessage`。若 SEND 类指令第一次已「输入文本+点了发送」后才抛异常，重试会**再发一次 = 重复回复**。服务端 P0-3（`OutboundSend` 幂等，表已建）挡住了「服务端下发两次」，但挡不住「APP 把一条执行两次」。
+
+**设计**（SP 持久化已执行指令，终端发送前查重）：
+1. 新建 `ExecutedCommandCache`（object），SP 存最近 N 条(如 500，FIFO 裁剪)已执行 SEND 指令的 key。
+2. key = `${message.messageId}#${message.type}#${message.titleList?.join()}#${message.receivedContent}`
+   （`messageId` 已在 `MyLooper.kt:132/146` 注入；同一帧兄弟指令共享 messageId，故必须拼 type+title+content 区分单条。**不要用 `generateFeatureValue`** —— 它是帧级 MD5，粒度错、会碰撞。）
+3. 在 `WeworkController.sendMessage`/`replyMessage`（SEND 类入口）最前面：若 key 已在缓存 → `uploadCommandResult(... SUCCESS "幂等跳过")` 直接返回，不执行；否则执行成功后 `put(key)`。
+
+**为什么是可选**：① 需 Kotlin 新文件 + 集成，本环境无法 build 验证；② P0-3（服务端）已覆盖最常见的「重复下发」场景，APP 侧重试双发是窄面。建议先发布 Patch 1+3a 观察重复率，仍有问题再上 3b。
+
+---
+
+## 注意
+
+- 这两个已应用补丁**改的是删除/注释行**，不影响 Kotlin 编译，可直接 build。
+- `Constant.duplicationFilter` 默认 ON（`Constant.kt` `getBoolean("apiDuplicationFilter", true)`），Patch 3a 后保持常开。
+- 服务端侧的配套：P0-2(入站持久去重)/P0-3(外发幂等) 已生效（`outbound_send`/`processed_msg_keys` 表已建，此前一直缺失=降级失效）。

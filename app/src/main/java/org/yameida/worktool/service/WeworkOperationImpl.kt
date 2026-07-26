@@ -1953,7 +1953,9 @@ object WeworkOperationImpl {
      */
     fun switchCorp(message: WeworkMessageBean, objectName: String): Boolean {
         val startTime = System.currentTimeMillis()
-        Constant.duplicationFilter = false
+        // P1-E: 移除 Constant.duplicationFilter = false。此前切企后该标志没有任何地方恢复,
+        // 导致后续所有指令的批内(LinkedHashSet)+队列(removeMessages)去重永久失效=重复回复风险。
+        // switchCorp 函数体只做 UI 导航, 不依赖 duplicationFilter, 移除安全; 去重保持常开。
         if (Constant.myCorp == objectName) {
             LogUtils.d("当前已在目标企业: $objectName")
             uploadCommandResult(message, ExecCallbackBean.SUCCESS, "当前已在目标企业: $objectName", startTime, listOf(objectName), listOf())
