@@ -255,6 +255,9 @@ public class WeworkMessageBean {
     public String fileUrl;
     public String fileType;
 
+    //指令插队 (官方API: up=true时插入队列顶部优先执行)
+    public Boolean up;
+
     public WeworkMessageBean() {}
 
     public WeworkMessageBean(String receivedName, String receivedContent, Integer type, Integer roomType, List<String> titleList, List<SubMessageBean> messageList, String log) {

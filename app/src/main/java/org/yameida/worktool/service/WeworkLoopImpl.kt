@@ -195,6 +195,43 @@ object WeworkLoopImpl {
     }
 
     /**
+     * P1-E 增量上报水位过滤(2026-07-31 E2E 实锤整批重放后新增, Patch 3c)
+     *
+     * 根因(路径A): getChatMessageList 每次进房间都把整个消息列表上报, 本地无「已上报」去重集合
+     * → 切企/重连/被杀重进/3s递归推断都会把旧消息整批重发 → 服务端跨 300s 去重窗口后重复处理,
+     *   甚至整批旧消息占用发送锁导致真消息漏回(20:14:43 生产事故)。
+     *
+     * 改法: 持久化水位 SP lastReportCount[房间标题] = 上次上报后该房间消息总条数。
+     * - 水位有效且条数增长 → 只上报水位之后的新消息(纯增量, 不重报任何旧消息)
+     * - 水位有效且条数相同 → 无新增, 返回空列表(跳过发送, 不重放)
+     * - 列表收缩/水位失效/首次 → 全量兜底(宁可重复, 服务端去重会拦, 不可漏)
+     *
+     * 水位 key 与 lastSyncMessage 互不干扰(那是首页比对水位, 有名称振荡问题, 此处用条数避开)。
+     */
+    private fun incrementalReport(titleList: ArrayList<String>, messageList: ArrayList<WeworkMessageBean.SubMessageBean>): ArrayList<WeworkMessageBean.SubMessageBean> {
+        val roomKey = titleList.firstOrNull() ?: return messageList
+        val sp = SPUtils.getInstance("lastReportCount")
+        val lastCount = sp.getInt(roomKey, -1)
+        val newCount = messageList.size
+        var reportList = messageList
+        when {
+            lastCount >= 0 && newCount > lastCount -> {
+                reportList = ArrayList(messageList.subList(lastCount, newCount))
+                LogUtils.v("增量上报: $roomKey $lastCount->$newCount 新增${newCount - lastCount}条")
+            }
+            lastCount >= 0 && newCount == lastCount -> {
+                reportList = ArrayList()
+                LogUtils.v("增量上报: $roomKey 无新增($newCount), 跳过发送")
+            }
+            else -> {
+                LogUtils.v("增量上报: $roomKey 水位失效($lastCount->$newCount), 全量${newCount}条")
+            }
+        }
+        sp.put(roomKey, newCount)
+        return reportList
+    }
+
+    /**
      * 聊天页
      * 1.获取群名
      * 2.获取消息列表
@@ -321,16 +358,20 @@ object WeworkLoopImpl {
                     }
                     messageList.removeIf { it.textType == WeworkMessageBean.TEXT_TYPE_IMAGE }
                 }
-                WeworkController.weworkService.webSocketManager.send(
-                    WeworkMessageBean(
-                        null, null,
-                        WeworkMessageBean.TYPE_RECEIVE_MESSAGE_LIST,
-                        roomType,
-                        titleList,
-                        messageList,
-                        null
+                // P1-E Patch 3c: 增量上报, 只发水位之后的新消息; 无新增跳过(防整批重放)
+                val reportList = incrementalReport(titleList, messageList)
+                if (reportList.isNotEmpty()) {
+                    WeworkController.weworkService.webSocketManager.send(
+                        WeworkMessageBean(
+                            null, null,
+                            WeworkMessageBean.TYPE_RECEIVE_MESSAGE_LIST,
+                            roomType,
+                            titleList,
+                            reportList,
+                            null
+                        )
                     )
-                )
+                }
                 //推测是否回复并在房间等待指令
                 if (needInfer) {
                     val lastMessage = messageList.lastOrNull()
