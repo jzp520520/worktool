@@ -549,7 +549,7 @@ object WeworkLoopImpl {
         val list = AccessibilityUtil.findAllOnceByText(getRoot(), "消息", exact = true)
         for (item in list) {
             val childCount = item.parent?.parent?.parent?.childCount
-            if (childCount == 4 || childCount == 5) {
+            if (childCount in 3..6) { // P1-E3: 放宽 a11y 树结构判断, 避免红点漏检
                 if (item.parent != null && item.parent.childCount > 1) {
                     LogUtils.d("消息有红点")
                     hasNewMessage = item
@@ -696,7 +696,7 @@ object WeworkLoopImpl {
             //tvList title/time/content
             if (tvList.size == 3) {
                 //只查看最近一周内的消息
-                if (tvList[1].isBlank() || tvList[1].contains("(刚刚)|(分钟前)|(上午)|(下午)|(昨天)|(星期)|(日程)|(会议)|(:)".toRegex())) {
+                if (tvList[1].isBlank() || tvList[1].contains("(刚刚)|(今天)|(小时前)|(分钟前)|(昨天)|(星期)|(上午)|(下午)|(日程)|(会议)|(月)|(日)|(:)".toRegex())) {
                     if (tvList[2].contains("(退出了外部群)|(移出了群聊)|(邀请你加入了)|(修改群名为)|(此群为外部群)|(加入了外部群)".toRegex())) {
                         val interval = System.currentTimeMillis() / 1000 - SPUtils.getInstance("noTipMessage").getLong(tvList[0], 0)
                         if (interval > 3600) {
@@ -723,6 +723,23 @@ object WeworkLoopImpl {
     }
 
     /**
+     * P1-E3: 首页预览与 lastSyncMessage 是否"已同步"。
+     * 两侧都剥离发送者前缀后完全相等才算已同步。
+     * 修复: 旧逻辑用 contains 子串判断, 新消息预览恰好包含旧消息文本时被误判已同步 → 漏检延迟。
+     */
+    private fun isPreviewSynced(preview: String, lastSyncMessage: String): Boolean {
+        fun strip(s: String): String {
+            var t = s.replace("\n", " ").trim(' ', ' ')
+            val idx = t.indexOf(": ")
+            if (idx in 1..12) { // 发送者前缀(短昵称+冒号), 剥离
+                t = t.substring(idx + 2)
+            }
+            return t
+        }
+        return strip(preview) == strip(lastSyncMessage)
+    }
+
+    /**
      * 检查首页-聊天列表是否有不一致消息
      * @return -1当前列表不存在一周内消息 0未发现不一致消息 1发现不一致消息
      */
@@ -741,16 +758,21 @@ object WeworkLoopImpl {
                 if (title == "群聊" || !titleSet.add(title)) {
                     continue
                 }
-                if (tvList[1].isBlank() || tvList[1].contains("(刚刚)|(分钟前)|(上午)|(下午)|(昨天)|(星期)|(日程)|(会议)|(:)".toRegex())) {
+                if (tvList[1].isBlank() || tvList[1].contains("(刚刚)|(今天)|(小时前)|(分钟前)|(昨天)|(星期)|(上午)|(下午)|(日程)|(会议)|(月)|(日)|(:)".toRegex())) {
                     val lastSyncMessage = SPUtils.getInstance("lastSyncMessage").getString(title, null)
                         ?: continue
-                    if (tvList[2].contains(lastSyncMessage.replace("\n", " ").trim(' ').trim())) {
+                    if (isPreviewSynced(tvList[2], lastSyncMessage)) {
                         continue
                     }
-                    if (SPUtils.getInstance("noSyncMessage").getString(title) != lastSyncMessage) {
+                    // P1-E3: noSyncMessage 冷却 — 同一 lastSyncMessage 不一致时 30s 后允许重试,
+                    // 避免房间被永久抑制(漏检到周期巡检才恢复)。防止1s死循环同时不长期漏检。
+                    val lastNoSync = SPUtils.getInstance("noSyncMessage").getString(title)
+                    val lastNoSyncTs = SPUtils.getInstance("noSyncMessage").getLong(title + ":t", 0)
+                    if (lastNoSync != lastSyncMessage || System.currentTimeMillis() - lastNoSyncTs > 30000) {
+                        SPUtils.getInstance("noSyncMessage").put(title, lastSyncMessage)
+                        SPUtils.getInstance("noSyncMessage").put(title + ":t", System.currentTimeMillis())
                         LogUtils.e("发现不一致消息: $tvList $lastSyncMessage")
                         error("发现不一致消息: $tvList $lastSyncMessage")
-                        SPUtils.getInstance("noSyncMessage").put(title, lastSyncMessage)
                         if (AccessibilityUtil.performClick(item)) {
                             //进入聊天页 下一步 getChatMessageList
                         } else {
@@ -758,11 +780,11 @@ object WeworkLoopImpl {
                         }
                         return 1
                     } else {
-                        LogUtils.v("消息多次不一致: $tvList")
+                        LogUtils.v("消息多次不一致(30s冷却): $tvList")
                     }
                 } else {
-                    LogUtils.v("未发现不一致消息: ${tvList[1]}")
-                    return -1
+                    // P1-E3: 时间格式无法识别(如纯日期)不再整表早退, 跳过该房间继续扫其它房间
+                    LogUtils.v("未识别时间格式, 跳过: ${tvList[1]}")
                 }
             }
         }
