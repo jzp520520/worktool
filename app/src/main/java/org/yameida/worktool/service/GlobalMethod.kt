@@ -55,7 +55,7 @@ fun goHomeTab(title: String): Boolean {
         val list = AccessibilityUtil.findAllOnceByText(getRoot(), title, exact = true)
         for (item in list) {
             val childCount = item.parent?.parent?.parent?.childCount
-            if (childCount == 4 || childCount == 5) {
+            if (childCount in 3..6) {
                 //处理侧边栏抽屉打开
                 if (title == "消息") {
                     val rect = Rect()
@@ -99,7 +99,7 @@ fun isAtHome(): Boolean {
     val list = AccessibilityUtil.findAllOnceByText(getRoot(), "消息", exact = true)
     val item = list.firstOrNull {
         val childCount = it.parent?.parent?.parent?.childCount
-        (childCount == 4 || childCount == 5)
+        (childCount in 3..6)
     } ?: return false
     if (!item.isSelected) {
         AccessibilityUtil.performClick(item)

@@ -144,7 +144,7 @@ object WeworkLoopImpl {
         val list = AccessibilityUtil.findAllOnceByText(getRoot(), "通讯录", exact = true)
         for (item in list) {
             val childCount = item.parent?.parent?.parent?.childCount
-            if (childCount == 4 || childCount == 5) {
+            if (childCount in 3..6) {
                 if (item.parent != null && item.parent.childCount > 1) {
                     LogUtils.d("通讯录有红点")
                     AccessibilityUtil.performClick(item)
@@ -195,39 +195,58 @@ object WeworkLoopImpl {
     }
 
     /**
-     * P1-E 增量上报水位过滤(2026-07-31 E2E 实锤整批重放后新增, Patch 3c)
+     * P1-E 增量上报水位过滤(Patch 3c 引入, Patch 3e 改内容水位)
      *
-     * 根因(路径A): getChatMessageList 每次进房间都把整个消息列表上报, 本地无「已上报」去重集合
-     * → 切企/重连/被杀重进/3s递归推断都会把旧消息整批重发 → 服务端跨 300s 去重窗口后重复处理,
-     *   甚至整批旧消息占用发送锁导致真消息漏回(20:14:43 生产事故)。
+     * Patch 3c 根因(路径A): getChatMessageList 每次进房间把整个消息列表上报 → 旧消息整批重发
+     * → 服务端跨去重窗口后重复处理, 整批占用发送锁漏回真消息(20:14:43 生产事故)。改条数水位。
      *
-     * 改法: 持久化水位 SP lastReportCount[房间标题] = 上次上报后该房间消息总条数。
-     * - 水位有效且条数增长 → 只上报水位之后的新消息(纯增量, 不重报任何旧消息)
-     * - 水位有效且条数相同 → 无新增, 返回空列表(跳过发送, 不重放)
-     * - 列表收缩/水位失效/首次 → 全量兜底(宁可重复, 服务端去重会拦, 不可漏)
+     * Patch 3e 修条数水位的漏报: a11y 聊天列表是滑动窗口, 新消息进来通常"位移"而非"增长"
+     * (条数不变) → 条数相等被当作"无新增"整批跳过 → 消息在群里可见却从未上报(2026-08-02
+     * 实锤: 延迟探针-2 在群里, 机器人进房 getChatMessageList 也不报)。
      *
-     * 水位 key 与 lastSyncMessage 互不干扰(那是首页比对水位, 有名称振荡问题, 此处用条数避开)。
+     * 改法: 水位存"上次上报的最后一条消息文本"(SP lastReportMsg[房间] = lastText), 比对当前最后一条:
+     * - 相同 → 无新增, 跳过
+     * - 不同 → 从末尾找上次最后一条的位置, 上报其之后的所有(窗口位移/增长都覆盖);
+     *          找不到(旧消息滚出窗口)/首次 → 全量兜底(宁可重复, 服务端去重会拦, 不可漏)
+     *
+     * 水位 key 与 lastSyncMessage 互不干扰(那是首页比对水位, 有名称振荡问题)。
      */
     private fun incrementalReport(titleList: ArrayList<String>, messageList: ArrayList<WeworkMessageBean.SubMessageBean>): ArrayList<WeworkMessageBean.SubMessageBean> {
         val roomKey = titleList.firstOrNull() ?: return messageList
-        val sp = SPUtils.getInstance("lastReportCount")
-        val lastCount = sp.getInt(roomKey, -1)
-        val newCount = messageList.size
-        var reportList = messageList
-        when {
-            lastCount >= 0 && newCount > lastCount -> {
-                reportList = ArrayList(messageList.subList(lastCount, newCount))
-                LogUtils.v("增量上报: $roomKey $lastCount->$newCount 新增${newCount - lastCount}条")
-            }
-            lastCount >= 0 && newCount == lastCount -> {
-                reportList = ArrayList()
-                LogUtils.v("增量上报: $roomKey 无新增($newCount), 跳过发送")
-            }
-            else -> {
-                LogUtils.v("增量上报: $roomKey 水位失效($lastCount->$newCount), 全量${newCount}条")
+        if (messageList.isEmpty()) return messageList
+        val sp = SPUtils.getInstance("lastReportMsg")
+        val lastText = sp.getString(roomKey, null)
+        val lastNow = messageList.last().itemMessageList.lastOrNull()?.text ?: ""
+
+        // 无新增: 当前最后一条 == 上次已上报的最后一条
+        if (lastText != null && lastText == lastNow) {
+            LogUtils.v("增量上报: $roomKey 无新增, 跳过发送")
+            return ArrayList()
+        }
+
+        // 有新增: 找上次最后一条在当前列表中的位置(从末尾), 上报其之后的全部
+        var startIdx = -1
+        if (lastText != null) {
+            for (i in messageList.indices.reversed()) {
+                val t = messageList[i].itemMessageList.lastOrNull()?.text ?: ""
+                if (t == lastText) { startIdx = i; break }
             }
         }
-        sp.put(roomKey, newCount)
+
+        val reportList: ArrayList<WeworkMessageBean.SubMessageBean> =
+            if (lastText == null || startIdx < 0) {
+                LogUtils.v("增量上报: $roomKey 水位失效/首次, 全量${messageList.size}条")
+                messageList
+            } else if (startIdx == messageList.size - 1) {
+                LogUtils.v("增量上报: $roomKey 最后一条已上报, 无新增")
+                ArrayList()
+            } else {
+                val delta = messageList.size - startIdx - 1
+                LogUtils.v("增量上报: $roomKey 新增${delta}条(水位后)")
+                ArrayList(messageList.subList(startIdx + 1, messageList.size))
+            }
+
+        if (lastNow.isNotEmpty()) sp.put(roomKey, lastNow)
         return reportList
     }
 
@@ -634,7 +653,7 @@ object WeworkLoopImpl {
                 LogUtils.v("回到消息列表顶部")
                 for (item in list) {
                     val childCount = item.parent?.parent?.parent?.childCount
-                    if (childCount == 4 || childCount == 5) {
+                    if (childCount in 3..6) {
                         AccessibilityUtil.clickByNode(WeworkController.weworkService, item)
                         sleep(Constant.POP_WINDOW_INTERVAL / 5)
                         AccessibilityUtil.clickByNode(WeworkController.weworkService, item)
@@ -1032,7 +1051,7 @@ object WeworkLoopImpl {
         var isSelect = false
         for (item in list) {
             val childCount = item.parent?.parent?.parent?.childCount
-            if (childCount == 4 || childCount == 5) {
+            if (childCount in 3..6) {
                 if (item.parent != null && item.parent.childCount > 1) {
                     LogUtils.d("有新消息时停止")
                     return true

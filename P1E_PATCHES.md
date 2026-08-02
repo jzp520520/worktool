@@ -61,6 +61,22 @@ Explore agent 曾报「`WeworkMessageBean` 无 equals/hashCode → `MyLooper:111
 
 ---
 
+## Patch 3e（2026-08-02，commit 见下）— isAtHome 与条数水位一致性修复
+
+**背景**：Patch 3d 装机后 probe 显示「首条上报正常, 之后全静默」。日志/命令通道实锤：**机器人主循环完全没在跑首页扫描**（150s 零日志），但 WS 心跳与发送指令正常。
+
+**根因一 — `isAtHome()` 未随 3d 放宽（主因，修复检测全死）**：
+- Patch 3d 把 `getChatroomList` 红点检测 `childCount==4||5` → `in 3..6`，但 **`isAtHome()`(GlobalMethod.kt)、`goHomeTab`、`getFriendRequest`、深扫、`hasNewMessage` 共 5 处仍用旧 `4||5`**。
+- 这台企微版本「消息」tab 无红点时 a11y 结构 childCount 是 3 或 6 → `isAtHome()` 恒 false → 主循环死磕 `if(!isAtHome())` 分支：`getChatMessageList`(首页 roomType=UNKNOWN 静默早退)+`goHome()` 空转 → **`getChatroomList` 永不执行, 永不检测新消息**。WS/发送队列是独立机制故仍正常。
+- 修复：5 处全部 `childCount in 3..6`。
+
+**根因二 — 条数水位滑动窗口漏报（`incrementalReport`）**：a11y 聊天列表是滑动窗口, 新消息进来通常「位移」而非「增长」(条数不变) → 条数相等被判「无新增」整批跳过。实测 -2 在群里、机器人进房 `getChatMessageList` 也不报。
+- 修复：水位改存「上次上报的最后一条消息文本」(SP `lastReportMsg[room]`)，比对当前最后一条：相同→无新增；不同→从末尾找上次位置上报其后全部；找不到/首次→全量(服务端去重兜底)。
+
+**验证**：装机后 re-probe，2 分钟内新消息应秒级入站；worktool-server `LOG_LEVEL=debug` 日志可见「读取首页聊天列表」每 ~120s 出现、红点检测、增量上报等全链路。
+
+---
+
 ## 待你决策的可选增强（Patch 3b — 终端发送幂等）
 
 **场景**：`MyLooper.kt:42-55` `handleMessage` 捕获异常后会 `goHome()` + **重试同一条** `dealWithMessage`。若 SEND 类指令第一次已「输入文本+点了发送」后才抛异常，重试会**再发一次 = 重复回复**。服务端 P0-3（`OutboundSend` 幂等，表已建）挡住了「服务端下发两次」，但挡不住「APP 把一条执行两次」。
