@@ -171,6 +171,8 @@ object MyLooper {
                 WeworkController.stopAndGoHome()
             }
             WeworkMessageBean.LOOP_RECEIVE_NEW_MESSAGE -> {
+                // Patch 3f 诊断: LOOP 指令是否真正派发到主循环
+                log("DIAG deal LOOP cmd enableLoopRunning=${WeworkController.enableLoopRunning}")
                 WeworkController.loopReceiveNewMessage()
             }
             WeworkMessageBean.SEND_MESSAGE -> {

@@ -35,17 +35,24 @@ object WeworkLoopImpl {
     val stopWords = arrayListOf("解析中")
     var logIndex = 0
     private var lastFriendRequestTime = 0L // 通讯录检查限频：60秒一次
+    private var loopDiag = 0L // Patch 3f 诊断计数
 
     fun mainLoop() {
-        if (!WeworkController.enableLoopRunning)
+        // Patch 3f 诊断: 入口/跳过状态打到服务器
+        if (!WeworkController.enableLoopRunning) {
+            log("DIAG mainLoop SKIP enableLoopRunning=false")
             return
+        }
         mainLoopRunning = true
+        log("DIAG mainLoop enter")
         try {
             while (mainLoopRunning) {
                 // ===== 企微工作阶段：52秒 =====
                 val weworkStartTime = System.currentTimeMillis()
                 while (mainLoopRunning && System.currentTimeMillis() - weworkStartTime < 52000) {
                     if (!isAtHome()) {
+                        // Patch 3f 诊断: 空转分支每15次打一次
+                        if (loopDiag++ % 15 == 0L) log("DIAG loop in notAtHome branch")
                         LogUtils.d("当前在房间: ")
                         getChatMessageList()
                         if (mainLoopRunning) {
@@ -558,6 +565,8 @@ object WeworkLoopImpl {
     private fun getChatroomList(): Boolean {
         if (Constant.autoReply == 0) return true
         if (!isAtHome()) { goHome() }
+        // Patch 3f 诊断: 每30次扫描确认到达首页扫描
+        if (loopDiag % 30 == 0L) log("DIAG getChatroomList enter")
 
         if (logIndex++ % 30 == 0) {
             LogUtils.d("读取首页聊天列表")

@@ -77,6 +77,32 @@ Explore agent 曾报「`WeworkMessageBean` 无 equals/hashCode → `MyLooper:111
 
 ---
 
+## Patch 3e 装机后验证（2026-08-02 20:14 装机，结果异常 → 引出 3f）
+
+**装机后探针结果（铁证）**：
+- 机器人 20:14:10 重连（Redmi K20 Pro, appVersion 2.8.1），指令通道完全正常：sendRawMessage 进房发送 6.5s 成功、505(GET_RECENT_LIST) 强制 goHome 成功并回传最近列表、SaaS 回复正常发出。
+- **但空闲主循环零扫描日志**：20:14:10 起 30 分钟，"读取首页聊天列表"(每120次扫打一次) 计数=0；手工发 202(LOOP_RECEIVE_NEW_MESSAGE) 也拉不起扫描。
+- 对比：Patch 3d 装机前 19:41/20:03 各打过一次"检查最近列表"(每600次扫)，说明 3d 时循环**在扫**但检测不可靠；3e 装机后循环**完全不扫**。
+- 已系统排除：enableLoopRunning 被关(仅 onDestroy/stopAndGoHome 置 false，均未发生)、isPause 空转(心跳每5s在发=未暂停)、handler 被 mainLoop 阻塞(指令 6.5s 秒回=handler空闲)、autoReply=0(20:18 曾上报过 -1/-2)。
+- 关键矛盾：指令能处理 ⇒ handler 空闲 ⇒ mainLoop 没在跑；但 202 也拉不起循环。**静态分析无法定位，需运行时日志。**
+
+## Patch 3f（2026-08-02，诊断补丁）— 主循环状态机 WS 可见化
+
+**目的**：在 4 个判定点打 WS 日志（走 type 301 → 服务器 journal 可见），下次装机几分钟内精确定位循环卡点：
+
+1. `MyLooper.dealWithMessage` LOOP 分支 → `DIAG deal LOOP cmd enableLoopRunning=..`（LOOP 指令是否真正派发）
+2. `WeworkLoopImpl.mainLoop()` 入口 → `DIAG mainLoop enter` / `DIAG mainLoop SKIP enableLoopRunning=false`（是否进入 / 是否被总开关拦）
+3. `GlobalMethod.isAtHome()` 返回 false 时 → `DIAG isAtHome=false msgTab=N counts=[..]`（**暴露"消息"tab 实际 childCount 结构**，验证 3..6 范围对不对；每15次判定打一次）
+4. mainLoop `!isAtHome()` 空转分支 → `DIAG loop in notAtHome branch`（每15次打一次）+ `DIAG getChatroomList enter`（每30次扫打一次）
+
+**预期**（装机后看服务器 journal）：
+- 全无 DIAG → LOOP 指令没派发到 handler（更深层问题）。
+- 只有 `mainLoop SKIP` → enableLoopRunning 被意外置 false。
+- `isAtHome=false counts=[..]` 反复 + `loop in notAtHome branch` → isAtHome 的 childCount 范围与这台企微实际结构不符，需修正范围/锚点。
+- `getChatroomList enter` 出现 → 循环在扫，之前的静默只是日志时序误判。
+
+---
+
 ## 待你决策的可选增强（Patch 3b — 终端发送幂等）
 
 **场景**：`MyLooper.kt:42-55` `handleMessage` 捕获异常后会 `goHome()` + **重试同一条** `dealWithMessage`。若 SEND 类指令第一次已「输入文本+点了发送」后才抛异常，重试会**再发一次 = 重复回复**。服务端 P0-3（`OutboundSend` 幂等，表已建）挡住了「服务端下发两次」，但挡不住「APP 把一条执行两次」。

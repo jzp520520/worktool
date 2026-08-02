@@ -23,6 +23,7 @@ import java.lang.Exception
 
 var lastWechatNotHomeToast = 0L // Toast限频：60秒内只弹一次
 var requestCode = 1000000
+var atHomeDiag = 0L // Patch 3f 诊断计数: isAtHome 空转检测, 每15次判定打一次WS日志
 fun fastStartActivity(context: Context, clazz: Class<*>, flags: Int = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP, i: Intent? = null) {
     val intent = i ?: Intent(context, clazz)
     intent.flags = flags
@@ -100,11 +101,19 @@ fun isAtHome(): Boolean {
     val item = list.firstOrNull {
         val childCount = it.parent?.parent?.parent?.childCount
         (childCount in 3..6)
-    } ?: return false
+    } ?: run {
+        // Patch 3f 诊断: 每15次判定失败打一次WS日志, 暴露实际childCount结构
+        if (atHomeDiag++ % 15 == 0L) {
+            val counts = list.map { it.parent?.parent?.parent?.childCount }
+            log("DIAG isAtHome=false msgTab=${list.size} counts=$counts")
+        }
+        return false
+    }
     if (!item.isSelected) {
         AccessibilityUtil.performClick(item)
         sleep(300)
     }
+    if (atHomeDiag++ % 120 == 0L) log("DIAG isAtHome=true")
     return true
 }
 
