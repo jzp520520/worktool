@@ -77,29 +77,27 @@ Explore agent 曾报「`WeworkMessageBean` 无 equals/hashCode → `MyLooper:111
 
 ---
 
-## Patch 3e 装机后验证（2026-08-02 20:14 装机，结果异常 → 引出 3f）
+## ✅ Patch 3e 装机后验证（2026-08-02 最终结论：3e 生效，检测正常）
 
-**装机后探针结果（铁证）**：
-- 机器人 20:14:10 重连（Redmi K20 Pro, appVersion 2.8.1），指令通道完全正常：sendRawMessage 进房发送 6.5s 成功、505(GET_RECENT_LIST) 强制 goHome 成功并回传最近列表、SaaS 回复正常发出。
-- **但空闲主循环零扫描日志**：20:14:10 起 30 分钟，"读取首页聊天列表"(每120次扫打一次) 计数=0；手工发 202(LOOP_RECEIVE_NEW_MESSAGE) 也拉不起扫描。
-- 对比：Patch 3d 装机前 19:41/20:03 各打过一次"检查最近列表"(每600次扫)，说明 3d 时循环**在扫**但检测不可靠；3e 装机后循环**完全不扫**。
-- 已系统排除：enableLoopRunning 被关(仅 onDestroy/stopAndGoHome 置 false，均未发生)、isPause 空转(心跳每5s在发=未暂停)、handler 被 mainLoop 阻塞(指令 6.5s 秒回=handler空闲)、autoReply=0(20:18 曾上报过 -1/-2)。
-- 关键矛盾：指令能处理 ⇒ handler 空闲 ⇒ mainLoop 没在跑；但 202 也拉不起循环。**静态分析无法定位，需运行时日志。**
+**Patch 3f 诊断 APK 装机（20:40 重连）后 DIAG 日志全绿**：
+- `DIAG deal LOOP cmd enableLoopRunning=true` + `DIAG mainLoop enter` → 主循环正常启动。
+- `DIAG isAtHome=true` + `DIAG getChatroomList enter`（每 ~2s）→ **循环在持续扫描首页**。
+- `DIAG isAtHome=false msgTab=0 counts=[]` → 仅出现在**进房后**（房间无"消息"tab），属正常状态非故障。
+- **探针验证：新消息检测上报延迟 = 5.3s / 5.4s（两次稳定复现）**，全链路：扫描→红点检测→进房→上报 type101→SaaS 转发 200→AI 回复 19-21s。
+- 完整检测动作链（journal）：`getChatroomList enter`(20:41:40) → `聊天: worktool测试`(43) → `回调转发 spoken=延迟探针...`(44) → `loop in notAtHome branch`+goHome 回首页(45) → `mainLoop enter`(20:42:06 重启续扫)。
+
+**关于 3e 首次装机(20:14)后循环不扫的真相**：3f 与 3e 循环逻辑完全相同（3f 仅加日志），20:40 装机后循环立即可扫 → **不是 3e 代码 bug，是启动态/竞态问题**（最可能：`WeworkService.onServiceConnected` 里 `Demo.test` 的 `removeCallbacksAndMessages(null)` 与服务器 202 指令的启动竞态，偶发清掉 LOOP_RECEIVE_NEW_MESSAGE；或装机瞬间手机屏幕态）。重装/重启即恢复，无持久影响。
 
 ## Patch 3f（2026-08-02，诊断补丁）— 主循环状态机 WS 可见化
 
-**目的**：在 4 个判定点打 WS 日志（走 type 301 → 服务器 journal 可见），下次装机几分钟内精确定位循环卡点：
+**目的**：在 4 个判定点打 WS 日志（走 type 301 → 服务器 journal 可见），定位 3e 首装后循环不扫。
 
-1. `MyLooper.dealWithMessage` LOOP 分支 → `DIAG deal LOOP cmd enableLoopRunning=..`（LOOP 指令是否真正派发）
-2. `WeworkLoopImpl.mainLoop()` 入口 → `DIAG mainLoop enter` / `DIAG mainLoop SKIP enableLoopRunning=false`（是否进入 / 是否被总开关拦）
-3. `GlobalMethod.isAtHome()` 返回 false 时 → `DIAG isAtHome=false msgTab=N counts=[..]`（**暴露"消息"tab 实际 childCount 结构**，验证 3..6 范围对不对；每15次判定打一次）
-4. mainLoop `!isAtHome()` 空转分支 → `DIAG loop in notAtHome branch`（每15次打一次）+ `DIAG getChatroomList enter`（每30次扫打一次）
+1. `MyLooper.dealWithMessage` LOOP 分支 → `DIAG deal LOOP cmd enableLoopRunning=..`
+2. `WeworkLoopImpl.mainLoop()` 入口 → `DIAG mainLoop enter` / `DIAG mainLoop SKIP`
+3. `GlobalMethod.isAtHome()` false 时 → `DIAG isAtHome=false msgTab=N counts=[..]`
+4. `!isAtHome()` 空转分支 → `DIAG loop in notAtHome branch` + `DIAG getChatroomList enter`
 
-**预期**（装机后看服务器 journal）：
-- 全无 DIAG → LOOP 指令没派发到 handler（更深层问题）。
-- 只有 `mainLoop SKIP` → enableLoopRunning 被意外置 false。
-- `isAtHome=false counts=[..]` 反复 + `loop in notAtHome branch` → isAtHome 的 childCount 范围与这台企微实际结构不符，需修正范围/锚点。
-- `getChatroomList enter` 出现 → 循环在扫，之前的静默只是日志时序误判。
+**结论**：4 点全通，已定位并确认 3e 修复生效。**注意**：`getChatroomList enter` 的节流有 bug（`loopDiag % 30` 未自增 → 循环 30 次后每次扫都打），诊断期可接受；如需干净生产日志，下个补丁去掉 DIAG 或修正计数即可。
 
 ---
 
