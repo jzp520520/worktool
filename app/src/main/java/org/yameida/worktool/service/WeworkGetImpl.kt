@@ -26,13 +26,26 @@ object WeworkGetImpl {
      * @param selectList 群名列表 为空时去群管理页查询并返回群聊页
      */
     fun getGroupInfo(message: WeworkMessageBean, selectList: List<String>): Boolean {
+        val startTime = System.currentTimeMillis()
+        var lastMembers: List<String>? = null
+        var readAny = false
         for (groupName in selectList) {
             if (WeworkRoomUtil.intoRoom(groupName) && WeworkRoomUtil.intoGroupManager()) {
-                val groupInfo = getGroupInfoDetail()
+                // saveMembers=true: 群>8人时点击"查看全部群成员"分屏下划读取全部成员(否则仅返回≤8人列表)
+                val groupInfo = getGroupInfoDetail(saveMembers = true)
+                lastMembers = groupInfo.nameList ?: emptyList()
+                readAny = true
+                // 群信息仍按原样上报(type=501, server 只记录), 成员列表走下方 socketType=3 回包给 HTTP
                 WeworkController.weworkService.webSocketManager.send(groupInfo)
             }
         }
-        return true
+        if (readAny) {
+            // 成员列表随执行结果(socketType=3)回传, server pendingRequests 按 messageId 匹配 → sendRawMessage HTTP 同步返回
+            uploadCommandResult(message, ExecCallbackBean.SUCCESS, "", startTime, successList = lastMembers ?: emptyList())
+        } else {
+            uploadCommandResult(message, ExecCallbackBean.ERROR_ILLEGAL_OPERATION, "进入群失败: ${selectList.joinToString()}", startTime)
+        }
+        return readAny
     }
 
     /**
