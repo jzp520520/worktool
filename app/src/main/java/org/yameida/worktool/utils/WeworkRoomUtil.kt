@@ -314,7 +314,8 @@ object WeworkRoomUtil {
 
     /**
      * 是否是群聊
-     * 群名最后有(\d)显示群人数
+     * 群名带(\d)人数后缀。注意: 内外部群都有人数, (N)只能区分「群 vs 单聊」, 不能区分内外;
+     * 外部群必须由前面的 isExternalGroup() 拦截(命中返回 1), 走到这里且带人数的即为内部群。
      */
     private fun isGroupChat(roomTitle: ArrayList<String>): Boolean {
         return roomTitle.size > 1 && roomTitle[1].contains(Constant.digitalRegex)
@@ -322,19 +323,41 @@ object WeworkRoomUtil {
 
     /**
      * 是否是外部群
-     * listview前兄弟控件 && text包含外部群
+     *
+     * 企微界面: 外部群名后/下方有绿色「外部」标记(列表页在群名右侧, 聊天页在群名下方)。
+     * 该标记不能读取复制, 由无障碍树承载(TextView 文本或 contentDescription), RPA 只能靠文本/描述识别。
+     * 与 getRoomTitle 使用同一标题区域定位(已验证能包含群名); 全树精确匹配兜底。
      */
     private fun isExternalGroup(): Boolean {
         //聊天消息列表 1ListView 0RecycleView xViewGroup
         val listView = AccessibilityUtil.findOnceByClazz(getRoot(), Views.ListView, limitDepth = null, depth = 0)
         if (listView != null) {
-            val frontNode = findFrontNode(listView)
-            if (frontNode != null) {
-                val nodeList = AccessibilityUtil.findAllOnceByText(frontNode, "外部群")
-                return nodeList.isNotEmpty()
+            // 标题栏区域: 与 getRoomTitle 同定位(父的父的前兄弟), 直接前兄弟兜底
+            val frontNode = findFrontNode(listView.parent?.parent) ?: findFrontNode(listView)
+            if (frontNode != null && isExternalMark(frontNode)) {
+                LogUtils.d("ROOM_TYPE: 识别到外部群标记「外部」(标题区域)")
+                return true
+            }
+            // 兜底: 全树精确匹配(排除消息列表子树内的命中, 那是消息内容不是群标记)
+            val root = getRoot()
+            val marks = AccessibilityUtil.findAllOnceByText(root, "外部", exact = true)
+                .plus(AccessibilityUtil.findAllOnceByText(root, "外部", exact = true, desc = true))
+            val inList = marks.count { listView.isAncestorOf(it) }
+            if (marks.size > inList) {
+                LogUtils.d("ROOM_TYPE: 识别到外部群标记「外部」(全树精确) total=${marks.size} inList=$inList")
+                return true
             }
         }
         return false
+    }
+
+    /**
+     * 「外部」标记识别: ①独立TextView精确"外部" ②与群名同节点(contains) ③contentDescription承载
+     */
+    private fun isExternalMark(node: AccessibilityNodeInfo): Boolean {
+        return AccessibilityUtil.findAllOnceByText(node, "外部", exact = true).isNotEmpty()
+                || AccessibilityUtil.findAllOnceByText(node, "外部").isNotEmpty()
+                || AccessibilityUtil.findAllOnceByText(node, "外部", desc = true).isNotEmpty()
     }
 
     /**
