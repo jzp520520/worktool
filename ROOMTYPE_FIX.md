@@ -88,3 +88,11 @@ APP 本地日志另有分支日志：`ROOM_TYPE: 识别到外部群标记「外�
 2. 服务器日志看 `[Sync] 发送请求: payload=...` 和 `WorkTool get_group_members response: ...`。
 3. 成功 → response `data.list[0].successList` 含全部成员名，DB `group_members` 落库。
 4. 若 response `code=408`（超时）→ APP 无障碍未完成进群/滚动（PC 企微需可导航状态，同 201102 问题）。
+
+## 编译状态（2026-08-08）
+
+- **本地工具链**：JDK 11（`/c/Program Files/Java/jdk-11.0.25+9`，Gradle 6.1.1/AGP 4.0 不兼容 JDK 17）+ Android SDK（`C:/Android/sdk`，platform-tools/platforms;android-30/build-tools;30.0.3）。
+- **坑1**：`local.properties` 的 `sdk.dir` 用**正斜杠** `C:/Android/sdk`；反斜杠 `C:\Android\sdk` 会被 properties 转义成 `C:Android\sdk` → SdkLocator 报「卷标语法不正确」。
+- **坑2**：`AccessibilityNodeInfo.isAncestorOf` 是 **API 31+** 方法，compileSdk 30 编译不过 → 改手动父链遍历 `isDescendantOf()`（兼容 minSdk 24）。
+- **产物**：`assembleDebug` → `app/build/outputs/apk/debug/app-debug.apk`（11MB，debug 版保留 LogUtils.d 诊断日志，适合装机验证 roomType 分支）。release 版 R8 会剥 Log，如需生产替换可另出签名 release。
+
