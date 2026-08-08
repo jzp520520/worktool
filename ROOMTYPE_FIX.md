@@ -55,3 +55,36 @@ APP 本地日志另有分支日志：`ROOM_TYPE: 识别到外部群标记「外�
 ## Plan B（若标记读不到）：数据驱动兜底
 
 群里消息出现**外部联系人 sender**（企微外部成员发言 sender 名字/旁带 `@微信`）→ 该群必为外部群（群性质创建时定死）。在 `getChatMessageList` 收到消息时检测 sender 特征并覆盖 roomType=1。此为后续方案，先验证本补丁。
+
+---
+
+# 群成员读取补丁（GET_GROUP_INFO 501）
+
+> 2026-08-08。目标：单群读取全部群成员（进群→三竖点→查看全部群成员→分屏下划）。
+
+## 现状（原代码已有逻辑，但两处断裂）
+
+- 读取本体 `WeworkGetImpl.getGroupInfoDetail(saveMembers)` **已完整**：读群名/群主/成员数/公告/备注；`saveMembers=true` 且群>8人时点击「查看全部群成员」→ ListView 分屏 + `scrollToBottom(maxRetry=100)` 下划读全。
+- **断裂1**：501 `getGroupInfo` 调 `getGroupInfoDetail()` 默认 `saveMembers=false` → 大群(>8人) nameList 不返回。
+- **断裂2**：501 `getGroupInfo` **从不调 `uploadCommandResult`** → 无 socketType=3 回包 → server `pendingRequests` 挂 60s 超时（此前「APP 60s不回」根因）；且成员走 groupInfo(socketType=2 type=501) 上报，server 只 log 不返回给 HTTP。
+
+## 改动（WeworkGetImpl.kt `getGroupInfo`）
+
+1. `getGroupInfoDetail(saveMembers = true)` → 单群也分屏下划读全部成员。
+2. 读到的 `nameList` 经 `uploadCommandResult(... successList = nameList)` 回传：
+   - socketType=3，`messageId` = 指令 messageId → server `pendingRequests` 按 messageId 匹配 → **sendRawMessage HTTP 同步响应直接返回成员**。
+   - 进群失败也回传 errorCode（不再静默超时）。
+   - 多群 selectList 时上报最后一个成功读到的群成员（一次回包）。
+
+## SaaS 侧配合（groups.py `sync_group_members`）
+
+- payload 改 `{socketType:2, list:[{type:501, groupName, selectList:[groupName]}]}`。
+- **删掉等 webhook 回调的轮询**（worktool-server 故意不转发指令结果），改从 sendRawMessage HTTP 同步响应 `data.list[0].successList` 拿成员。
+- httpx timeout 65s（> server 60s）。
+
+## 装机验证
+
+1. 新版 APK 装机后，SaaS 调 `/api/groups/{id}/sync-members`。
+2. 服务器日志看 `[Sync] 发送请求: payload=...` 和 `WorkTool get_group_members response: ...`。
+3. 成功 → response `data.list[0].successList` 含全部成员名，DB `group_members` 落库。
+4. 若 response `code=408`（超时）→ APP 无障碍未完成进群/滚动（PC 企微需可导航状态，同 201102 问题）。
