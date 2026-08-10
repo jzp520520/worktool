@@ -342,7 +342,7 @@ object WeworkRoomUtil {
             val root = getRoot()
             val marks = AccessibilityUtil.findAllOnceByText(root, "外部", exact = true)
                 .plus(AccessibilityUtil.findAllOnceByText(root, "外部", exact = true, desc = true))
-            val inList = marks.count { listView.isAncestorOf(it) }
+            val inList = marks.count { isDescendantOf(listView, it) }
             if (marks.size > inList) {
                 LogUtils.d("ROOM_TYPE: 识别到外部群标记「外部」(全树精确) total=${marks.size} inList=$inList")
                 return true
@@ -358,6 +358,18 @@ object WeworkRoomUtil {
         return AccessibilityUtil.findAllOnceByText(node, "外部", exact = true).isNotEmpty()
                 || AccessibilityUtil.findAllOnceByText(node, "外部").isNotEmpty()
                 || AccessibilityUtil.findAllOnceByText(node, "外部", desc = true).isNotEmpty()
+    }
+
+    /**
+     * child 是否在 node 子树内 (API<31 兼容: AccessibilityNodeInfo.isAncestorOf 需要 API 31+, 手动父链遍历)
+     */
+    private fun isDescendantOf(node: AccessibilityNodeInfo, child: AccessibilityNodeInfo): Boolean {
+        var current = child.parent
+        while (current != null) {
+            if (current === node) return true
+            current = current.parent
+        }
+        return false
     }
 
     /**

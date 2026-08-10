@@ -52,9 +52,18 @@ val nodeList = findAllOnceByText(frontNode, "外部群")   // ② 搜"外部群"
 
 APP 本地日志另有分支日志：`ROOM_TYPE: 识别到外部群标记「外部」(标题区域)` / `(全树精确)`。
 
-## Plan B（若标记读不到）：数据驱动兜底
+## Plan B（已实施 + 装机验证 2026-08-09）：sender「＠微信」兜底
 
-群里消息出现**外部联系人 sender**（企微外部成员发言 sender 名字/旁带 `@微信`）→ 该群必为外部群（群性质创建时定死）。在 `getChatMessageList` 收到消息时检测 sender 特征并覆盖 roomType=1。此为后续方案，先验证本补丁。
+**背景**：补丁(patch0001)靠聊天页标题栏「外部群|群主」副标题判定。装机诊断发现该副标题**渲染时机不稳**(有时只群名"worktool测试")→ 补丁偶发不命中 → 误判内部群3。diag版实测 worktool测试群(外部群)蒋宗培2(内部成员)消息 roomType=3 误判。
+
+**实施**(WeworkLoopImpl.kt `getChatMessageList`)：`var roomType = WeworkRoomUtil.getRoomType()` 后, 若 `roomType == ROOM_TYPE_INTERNAL_GROUP(3)`, 扫 ListView 所有可见消息项 sender nameList(`WeworkTextUtil.getNameList`), 任意含"微信"(即「＠微信」外部联系人全角标识)→ 修正 `ROOM_TYPE_EXTERNAL_GROUP(1)` 并 log("ROOM_TYPE PlanB:...")。覆盖"副标题没渲染 + 当前是内部成员发言"场景(扫群内任意历史＠微信 sender 即判外部)。
+
+**验证**(DB `messages.room_type` 权威, 真机 Xiaomi RedmiK20Pro/Android10)：
+- planb-fix版: 橘络(外部联系人) rt=1 ✓; 蒋宗培2(内部成员) rt=1 ✓
+- diag旧版: 蒋宗培2 rt=3 ❌(误判, 补丁副标题那次没渲染)
+- 产物: `apk/worktool-2.8.1-roomtype-planb-fix.apk` (dex 校验 PlanB=2 / ROOM_DIAG=0)
+
+**残余盲区**: 副标题没渲染 + 群内近期无任何「＠微信」sender(纯内部成员短期对话)→ PlanB 兜不到仍可能误判3; 外部群本质含外部联系人, 该窗口罕见。匹配用 contains("微信") 而非精确"＠微信", 内部成员昵称含"微信"理论误报(极罕见, 且误报方向=更严隔离, 安全侧, 暂不收紧)。
 
 ---
 
@@ -88,3 +97,11 @@ APP 本地日志另有分支日志：`ROOM_TYPE: 识别到外部群标记「外�
 2. 服务器日志看 `[Sync] 发送请求: payload=...` 和 `WorkTool get_group_members response: ...`。
 3. 成功 → response `data.list[0].successList` 含全部成员名，DB `group_members` 落库。
 4. 若 response `code=408`（超时）→ APP 无障碍未完成进群/滚动（PC 企微需可导航状态，同 201102 问题）。
+
+## 编译状态（2026-08-08）
+
+- **本地工具链**：JDK 11（`/c/Program Files/Java/jdk-11.0.25+9`，Gradle 6.1.1/AGP 4.0 不兼容 JDK 17）+ Android SDK（`C:/Android/sdk`，platform-tools/platforms;android-30/build-tools;30.0.3）。
+- **坑1**：`local.properties` 的 `sdk.dir` 用**正斜杠** `C:/Android/sdk`；反斜杠 `C:\Android\sdk` 会被 properties 转义成 `C:Android\sdk` → SdkLocator 报「卷标语法不正确」。
+- **坑2**：`AccessibilityNodeInfo.isAncestorOf` 是 **API 31+** 方法，compileSdk 30 编译不过 → 改手动父链遍历 `isDescendantOf()`（兼容 minSdk 24）。
+- **产物**：`assembleDebug` → `app/build/outputs/apk/debug/app-debug.apk`（11MB，debug 版保留 LogUtils.d 诊断日志，适合装机验证 roomType 分支）。release 版 R8 会剥 Log，如需生产替换可另出签名 release。
+

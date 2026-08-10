@@ -266,7 +266,30 @@ object WeworkLoopImpl {
      */
     fun getChatMessageList(needInfer: Boolean = !Constant.pushImage, imageCheck: Boolean = true, timeout: Long = 3000, titleList: ArrayList<String>? = null): Boolean {
         if (Constant.autoReply == 0) return true
-        val roomType = WeworkRoomUtil.getRoomType()
+        var roomType = WeworkRoomUtil.getRoomType()
+        // PlanB(2026-08-09): 聊天页标题栏「外部群|群主」副标题渲染时机不稳(有时只群名→误判内部群3),
+        // 用消息 sender「＠微信」兜底: 外部群才有微信外部联系人发言(nameList 带"＠微信"), 内部群成员均为企微内部无此标识
+        if (roomType == WeworkMessageBean.ROOM_TYPE_INTERNAL_GROUP) {
+            try {
+                val pLv = AccessibilityUtil.findOneByClazz(getRoot(), Views.ListView)
+                if (pLv != null) {
+                    for (i in 0 until pLv.childCount) {
+                        val it2 = pLv.getChild(i) ?: continue
+                        val rel = AccessibilityUtil.findOnceByClazz(it2, Views.RelativeLayout, limitDepth = 1)
+                        if (rel != null && rel.childCount >= 2 && Views.ImageView.equals(rel.getChild(0).className)) {
+                            val nm = WeworkTextUtil.getNameList(it2)
+                            if (nm.any { it.contains("微信") }) {
+                                roomType = WeworkMessageBean.ROOM_TYPE_EXTERNAL_GROUP
+                                log("ROOM_TYPE PlanB: sender含外部联系人标识(${nm.joinToString(",")}) → 外部群(1)")
+                                break
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                log("ROOM_TYPE PlanB err: ${e.message}")
+            }
+        }
         var titleList = titleList ?: WeworkRoomUtil.getRoomTitle()
         if (titleList.count { it.endsWith("…") } > 0) {
             LogUtils.d("title too long... try get full name titleList: ${titleList.joinToString()}")
